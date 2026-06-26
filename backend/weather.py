@@ -8,65 +8,59 @@ def get_live_weather(lat, lon):
             "latitude": lat,
             "longitude": lon,
             "current_weather": True,
-            "hourly": "temperature_2m,precipitation,relative_humidity_2m,wind_speed_10m,cloud_cover",
+            "hourly": "temperature_2m,precipitation,relative_humidity_2m,wind_speed_10m,wind_direction_10m,surface_pressure,cloud_cover",
             "timezone": "Asia/Kolkata"
         }
         
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
         
-        # Get current weather
         current = data.get('current_weather', {})
-        
-        # Get hourly data for humidity and cloud cover
         hourly = data.get('hourly', {})
         
         # Extract values with proper fallbacks
-        temperature = current.get('temperature')
-        rainfall = current.get('precipitation')
-        wind_speed = current.get('windspeed')
-        wind_direction = current.get('winddirection')
-        timestamp = current.get('time')
+        temperature = current.get('temperature', 0)
+        rainfall = current.get('precipitation', 0)
+        wind_speed = current.get('windspeed', 0)
+        wind_direction = current.get('winddirection', 0)
+        timestamp = current.get('time', datetime.now().isoformat())
         
-        # Get humidity from hourly data (first value)
-        humidity = None
+        # Get humidity from hourly data
+        humidity = 45  # Default fallback
         if 'relative_humidity_2m' in hourly and hourly['relative_humidity_2m']:
             humidity = hourly['relative_humidity_2m'][0]
         
-        # Get cloud cover from hourly data (first value)
-        cloud_cover = None
+        # Get cloud cover from hourly data
+        cloud_cover = 20  # Default fallback
         if 'cloud_cover' in hourly and hourly['cloud_cover']:
             cloud_cover = hourly['cloud_cover'][0]
         
-        # If no humidity from hourly, use a default
-        if humidity is None:
-            humidity = 45  # Default fallback
-        
-        if cloud_cover is None:
-            cloud_cover = 20  # Default fallback
+        # Get pressure from hourly data
+        pressure = 1013  # Default fallback
+        if 'surface_pressure' in hourly and hourly['surface_pressure']:
+            pressure = hourly['surface_pressure'][0]
         
         return {
-            'temperature': temperature if temperature is not None else 0,
-            'rainfall': rainfall if rainfall is not None else 0,
+            'temperature': temperature,
+            'rainfall': rainfall,
             'humidity': humidity,
-            'wind_speed': wind_speed if wind_speed is not None else 0,
-            'wind_direction': wind_direction if wind_direction is not None else 0,
+            'wind_speed': wind_speed,
+            'wind_direction': wind_direction,
+            'pressure': pressure,
             'cloud_cover': cloud_cover,
-            'pressure': 1013,  # Default pressure (Open-Meteo free tier doesn't provide pressure in current_weather)
-            'timestamp': timestamp if timestamp else datetime.now().isoformat(),
+            'timestamp': timestamp,
             'source': 'Open-Meteo'
         }
     except Exception as e:
         print(f"⚠️ Weather API error: {e}")
-        # Return fallback data so frontend doesn't break
         return {
             'temperature': 25,
             'rainfall': 0,
             'humidity': 45,
             'wind_speed': 10,
             'wind_direction': 180,
-            'cloud_cover': 20,
             'pressure': 1013,
+            'cloud_cover': 20,
             'timestamp': datetime.now().isoformat(),
             'source': 'Fallback'
         }

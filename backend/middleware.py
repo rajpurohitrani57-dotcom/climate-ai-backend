@@ -16,7 +16,7 @@ def log_request(f):
         logger.info(f"📥 {request.method} {request.path} from {request.remote_addr}")
         response = f(*args, **kwargs)
         elapsed = time.time() - start_time
-        logger.info(f"✅ Completed in {elapsed:.3f}s - Status: {response[1] if isinstance(response, tuple) else 200}")
+        logger.info(f"✅ Completed in {elapsed:.3f}s")
         return response
     return decorated_function
 
