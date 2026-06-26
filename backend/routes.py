@@ -40,6 +40,14 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Credentials', 'true')
     return response
 
+# Global variables
+model = None
+X_data = None
+data_loaded = False
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
 @api.route('/health', methods=['GET', 'OPTIONS'])
 @cross_origin()
 def health():
@@ -54,16 +62,13 @@ def health():
         'timestamp': datetime.now().isoformat()
     })
 
-# Global variables
-model = None
-X_data = None
-data_loaded = False
-
+# ============================================================
+# MODEL LOADING FUNCTIONS
+# ============================================================
 def load_model():
     global model
     if model is None and AI_AVAILABLE:
         try:
-            # Try multiple possible paths
             possible_paths = [
                 '/app/model/climate_model.pth',
                 'model/climate_model.pth',
@@ -81,9 +86,6 @@ def load_model():
             
             if model_path is None:
                 print("❌ Model file not found in any location")
-                print(f"   Current directory: {os.getcwd()}")
-                if os.path.exists('model'):
-                    print(f"   Files in model dir: {os.listdir('model')}")
                 return None
             
             model = ClimateCNN_LSTM(input_channels=1)
@@ -100,12 +102,14 @@ def load_real_data():
     if X_data is None and AI_AVAILABLE:
         try:
             import xarray as xr
-            DATA_FOLDER = r'C:\Users\HP\OneDrive\Desktop\imd_data'
+            DATA_FOLDER = r'/opt/render/project/src/imd_data'
             
             if not os.path.exists(DATA_FOLDER):
-                print(f"⚠️ Data folder not found: {DATA_FOLDER}")
-                data_loaded = False
-                return X_data, data_loaded
+                DATA_FOLDER = r'C:\Users\HP\OneDrive\Desktop\imd_data'
+                if not os.path.exists(DATA_FOLDER):
+                    print(f"⚠️ Data folder not found")
+                    data_loaded = False
+                    return X_data, data_loaded
             
             nc_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith('.nc')]
             if not nc_files:
@@ -149,6 +153,9 @@ def load_real_data():
             data_loaded = False
     return X_data, data_loaded
 
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
 def predict_with_uncertainty(model, input_tensor, n_samples=10):
     if model is None:
         return {
@@ -217,9 +224,8 @@ def simulate_whatif(model, input_tensor, temp_delta=0, rain_delta=0):
     return float(new_pred[0][0])
 
 # ============================================================
-# API ENDPOINTS
+# CITIES ENDPOINT
 # ============================================================
-
 @api.route('/cities', methods=['GET', 'OPTIONS'])
 @cross_origin()
 def get_cities():
@@ -227,6 +233,9 @@ def get_cities():
         return '', 200
     return jsonify({'cities': INDIAN_CITIES})
 
+# ============================================================
+# PREDICT ENDPOINT
+# ============================================================
 @api.route('/predict', methods=['POST', 'OPTIONS'])
 @cross_origin()
 @log_request
@@ -284,6 +293,9 @@ def predict():
         'timestamp': datetime.now().isoformat()
     })
 
+# ============================================================
+# WHATIF ENDPOINT
+# ============================================================
 @api.route('/whatif', methods=['POST', 'OPTIONS'])
 @cross_origin()
 @log_request
@@ -322,6 +334,9 @@ def whatif():
         'data_source': 'real' if data_loaded else 'synthetic' if model is not None else 'placeholder'
     })
 
+# ============================================================
+# EXPLAIN HUMAN ENDPOINT
+# ============================================================
 @api.route('/explain_human', methods=['POST', 'OPTIONS'])
 @cross_origin()
 @log_request
@@ -358,7 +373,7 @@ def explain_human():
     except (ImportError, Exception):
         result = {
             'prediction': random.uniform(-0.5, 0.5),
-            'prediction_meaning': 'simulated prediction (explain module not available)',
+            'prediction_meaning': 'simulated prediction',
             'explanation': {
                 'human_explanation': '🔍 **Explanation:** The model used spatial patterns to make this prediction.\n\n📊 **Key Insights:**\n- The model found patterns in the rainfall data\n- Confidence Level: MEDIUM\n\n💡 **What this means:**\nThis is a simulated explanation. Install captum for full explainability.',
                 'summary': {
@@ -383,6 +398,9 @@ def explain_human():
         'timestamp': datetime.now().isoformat()
     })
 
+# ============================================================
+# CLIMATE ENDPOINT
+# ============================================================
 @api.route('/climate', methods=['POST', 'OPTIONS'])
 @cross_origin()
 @log_request
@@ -468,6 +486,9 @@ def get_climate():
         'timestamp': datetime.now().isoformat()
     })
 
+# ============================================================
+# HISTORY ENDPOINT (FIXED - No 500 Error)
+# ============================================================
 @api.route('/history', methods=['GET', 'OPTIONS'])
 @cross_origin()
 @log_request
@@ -477,14 +498,32 @@ def get_history():
     
     limit = safe_int(request.args.get('limit', 50))
     try:
+        # Check if table exists
+        from sqlalchemy import inspect
+        inspector = inspect(db.engine)
+        if not inspector.has_table('predictions'):
+            return jsonify({
+                'predictions': [],
+                'count': 0,
+                'message': 'No predictions yet. Make a prediction first!'
+            }), 200
+        
         predictions = Prediction.query.order_by(Prediction.timestamp.desc()).limit(limit).all()
         return jsonify({
             'predictions': [p.to_dict() for p in predictions],
             'count': len(predictions)
         })
     except Exception as e:
-        return jsonify({'error': f'Database error: {str(e)}'}), 500
+        print(f"⚠️ History error: {e}")
+        return jsonify({
+            'predictions': [],
+            'count': 0,
+            'error': str(e)
+        }), 200
 
+# ============================================================
+# ALERTS ENDPOINT (FIXED - No 500 Error)
+# ============================================================
 @api.route('/alerts', methods=['GET', 'OPTIONS'])
 @cross_origin()
 @log_request
@@ -494,14 +533,32 @@ def get_alerts():
     
     limit = safe_int(request.args.get('limit', 20))
     try:
+        # Check if table exists
+        from sqlalchemy import inspect
+        inspector = inspect(db.engine)
+        if not inspector.has_table('alerts'):
+            return jsonify({
+                'alerts': [],
+                'count': 0,
+                'message': 'No alerts yet.'
+            }), 200
+        
         alerts = Alert.query.order_by(Alert.timestamp.desc()).limit(limit).all()
         return jsonify({
             'alerts': [a.to_dict() for a in alerts],
             'count': len(alerts)
         })
     except Exception as e:
-        return jsonify({'error': f'Database error: {str(e)}'}), 500
+        print(f"⚠️ Alerts error: {e}")
+        return jsonify({
+            'alerts': [],
+            'count': 0,
+            'error': str(e)
+        }), 200
 
+# ============================================================
+# MARK ALERT AS READ
+# ============================================================
 @api.route('/alerts/<int:alert_id>/read', methods=['PUT', 'OPTIONS'])
 @cross_origin()
 @log_request
