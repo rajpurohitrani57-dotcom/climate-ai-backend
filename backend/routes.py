@@ -2,9 +2,10 @@ import os
 import sys
 import torch
 import numpy as np
-from flask import request, jsonify, Blueprint
-from datetime import datetime
 import random
+from flask import request, jsonify, Blueprint
+from flask_cors import cross_origin
+from datetime import datetime
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -13,9 +14,7 @@ from backend.database import db
 from backend.models import Prediction, Alert
 from backend.weather import get_live_weather, INDIAN_CITIES
 from backend.middleware import log_request, rate_limit
-from backend.utils import safe_float, format_timestamp
-from backend.middleware import log_request, rate_limit
-from backend.utils import safe_float, format_timestamp
+from backend.utils import safe_float, safe_int, format_timestamp
 
 # Import AI modules
 try:
@@ -30,28 +29,61 @@ except ImportError as e:
 # Create blueprint
 api = Blueprint('api', __name__, url_prefix='/api')
 
-# Global variables for model and data
 # ============================================================
-# GLOBAL VARIABLES
+# CORS Headers for all routes
 # ============================================================
+@api.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
+
+@api.route('/health', methods=['GET', 'OPTIONS'])
+@cross_origin()
+def health():
+    if request.method == 'OPTIONS':
+        return '', 200
+    model_loaded = model is not None
+    return jsonify({
+        'status': 'healthy',
+        'model_loaded': model_loaded,
+        'ai_available': AI_AVAILABLE,
+        'data_source': 'real' if data_loaded else 'synthetic' if AI_AVAILABLE else 'none',
+        'timestamp': datetime.now().isoformat()
+    })
+
+# Global variables
 model = None
 X_data = None
 data_loaded = False
 
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
-
 def load_model():
-    """Load the AI model"""
     global model
     if model is None and AI_AVAILABLE:
         try:
-            model_path = 'model/climate_model.pth'
-            print(f"🔍 Loading AI model from: {model_path}")
+            # Try multiple possible paths
+            possible_paths = [
+                '/app/model/climate_model.pth',
+                'model/climate_model.pth',
+                './model/climate_model.pth',
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'model', 'climate_model.pth'),
+                os.path.join(os.getcwd(), 'model', 'climate_model.pth'),
+            ]
             
-            if not os.path.exists(model_path):
-                print(f"⚠️ Model file not found at {model_path}")
+            model_path = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    model_path = path
+                    print(f"✅ Found model at: {path}")
+                    break
+            
+            if model_path is None:
+                print("❌ Model file not found in any location")
+                print(f"   Current directory: {os.getcwd()}")
+                if os.path.exists('model'):
+                    print(f"   Files in model dir: {os.listdir('model')}")
                 return None
             
             model = ClimateCNN_LSTM(input_channels=1)
@@ -64,7 +96,6 @@ def load_model():
     return model
 
 def load_real_data():
-    """Load real IMD data"""
     global X_data, data_loaded
     if X_data is None and AI_AVAILABLE:
         try:
@@ -119,7 +150,6 @@ def load_real_data():
     return X_data, data_loaded
 
 def predict_with_uncertainty(model, input_tensor, n_samples=10):
-    """Get prediction with uncertainty"""
     if model is None:
         return {
             'prediction': random.uniform(-0.5, 0.5),
@@ -151,7 +181,6 @@ def predict_with_uncertainty(model, input_tensor, n_samples=10):
     }
 
 def climate_risk_score(temp, rain, temp_threshold=35, rain_threshold=100):
-    """Calculate climate risk score (0-10)"""
     temp_risk = min(10, max(0, (temp - 25) / (temp_threshold - 25) * 10))
     rain_risk = min(10, max(0, (rain_threshold - rain) / rain_threshold * 10))
     total_risk = 0.5 * temp_risk + 0.5 * rain_risk
@@ -173,7 +202,6 @@ def climate_risk_score(temp, rain, temp_threshold=35, rain_threshold=100):
     }
 
 def simulate_whatif(model, input_tensor, temp_delta=0, rain_delta=0):
-    """What-if simulation"""
     if model is None:
         return random.uniform(-0.5, 0.5)
     
@@ -192,64 +220,31 @@ def simulate_whatif(model, input_tensor, temp_delta=0, rain_delta=0):
 # API ENDPOINTS
 # ============================================================
 
-@api.route('/health', methods=['GET'])
-@log_request
-def health():
-    """Health check endpoint"""
-    model_loaded = model is not None
-    return jsonify({
-        'status': 'healthy',
-        'model_loaded': model_loaded,
-        'data_source': 'real' if data_loaded else 'synthetic' if AI_AVAILABLE else 'none',
-        'ai_available': AI_AVAILABLE,
-        'timestamp': datetime.now().isoformat()
-    })
-
-@api.route('/test', methods=['GET'])
-@log_request
-def test():
-    """Test endpoint"""
-    return jsonify({
-        'message': '✅ Backend is working!',
-        'ai_available': AI_AVAILABLE,
-        'model_loaded': model is not None,
-        'endpoints': [
-            'GET  /api/health',
-            'GET  /api/test',
-            'GET  /api/cities',
-            'POST /api/predict',
-            'POST /api/whatif',
-            'POST /api/explain_human',
-            'POST /api/predict_weather',
-            'GET  /api/history',
-            'GET  /api/alerts'
-        ]
-    })
-
-@api.route('/cities', methods=['GET'])
-@log_request
+@api.route('/cities', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def get_cities():
-    """Get list of Indian cities"""
+    if request.method == 'OPTIONS':
+        return '', 200
     return jsonify({'cities': INDIAN_CITIES})
 
-@api.route('/predict', methods=['POST'])
+@api.route('/predict', methods=['POST', 'OPTIONS'])
+@cross_origin()
 @log_request
-@rate_limit(limit_per_minute=30)
 def predict():
-    data = request.json
+    if request.method == 'OPTIONS':
+        return '', 200
     
+    data = request.json
     if data is None:
         return jsonify({'error': 'No JSON data provided'}), 400
     
-    # Load model and data
     load_model()
     load_real_data()
     
     temperature = safe_float(data.get('temperature', 30.0))
     rainfall = safe_float(data.get('rainfall', 50.0))
     
-    # --- Get input tensor ---
-    if data_loaded and 'features' not in data:
+    if data_loaded and X_data is not None:
         idx = np.random.randint(0, len(X_data))
         input_tensor = X_data[idx:idx+1].clone()
     elif 'features' in data:
@@ -258,24 +253,11 @@ def predict():
         except Exception as e:
             return jsonify({'error': f'Invalid features format: {str(e)}'}), 400
     else:
-        # Create dummy input if no real data
         input_tensor = torch.randn(1, 30, 1, 10, 10)
     
-    # --- REAL PREDICTION (not placeholder) ---
-    if model is not None:
-        # Use the actual model
-        result = predict_with_uncertainty(model, input_tensor)
-    else:
-        # Fallback to placeholder
-        result = {
-            'prediction': random.uniform(-0.5, 0.5),
-            'uncertainty': random.uniform(0.01, 0.1),
-            'confidence_interval': [-0.5, 0.5]
-        }
-    
+    result = predict_with_uncertainty(model, input_tensor)
     risk = climate_risk_score(temperature, rainfall)
     
-    # Save to database
     try:
         prediction = Prediction(
             temperature=temperature,
@@ -302,12 +284,14 @@ def predict():
         'timestamp': datetime.now().isoformat()
     })
 
-@api.route('/whatif', methods=['POST'])
+@api.route('/whatif', methods=['POST', 'OPTIONS'])
+@cross_origin()
 @log_request
 def whatif():
-    """What-if simulation endpoint"""
-    data = request.json
+    if request.method == 'OPTIONS':
+        return '', 200
     
+    data = request.json
     if data is None:
         return jsonify({'error': 'No JSON data provided'}), 400
     
@@ -318,8 +302,7 @@ def whatif():
     rain_delta = safe_float(data.get('rain_delta', 0.0))
     use_real_sample = data.get('use_real_sample', False)
     
-    # Get input tensor
-    if use_real_sample and data_loaded:
+    if use_real_sample and data_loaded and X_data is not None:
         idx = np.random.randint(0, len(X_data))
         input_tensor = X_data[idx:idx+1].clone()
     elif 'features' in data:
@@ -336,15 +319,17 @@ def whatif():
         'whatif_prediction': new_pred,
         'temp_delta': temp_delta,
         'rain_delta': rain_delta,
-        'data_source': 'real' if data_loaded else 'synthetic' if AI_AVAILABLE else 'placeholder'
+        'data_source': 'real' if data_loaded else 'synthetic' if model is not None else 'placeholder'
     })
 
-@api.route('/explain_human', methods=['POST'])
+@api.route('/explain_human', methods=['POST', 'OPTIONS'])
+@cross_origin()
 @log_request
 def explain_human():
-    """Human-readable explanation"""
-    data = request.json
+    if request.method == 'OPTIONS':
+        return '', 200
     
+    data = request.json
     if data is None:
         return jsonify({'error': 'No JSON data provided'}), 400
     
@@ -356,8 +341,7 @@ def explain_human():
     temperature = safe_float(data.get('temperature', 30.0))
     rainfall = safe_float(data.get('rainfall', 50.0))
     
-    # Get input tensor
-    if use_real_sample and data_loaded:
+    if use_real_sample and data_loaded and X_data is not None:
         idx = np.random.randint(0, len(X_data))
         input_tensor = X_data[idx:idx+1].clone()
     elif 'features' in data:
@@ -368,17 +352,15 @@ def explain_human():
     else:
         input_tensor = torch.randn(1, 30, 1, 10, 10)
     
-    # Check if explain module is available
     try:
         from src.explain import model_prediction_with_explanation
         result = model_prediction_with_explanation(model, input_tensor, method)
-    except ImportError:
-        # Fallback: generate a simple explanation
+    except (ImportError, Exception):
         result = {
             'prediction': random.uniform(-0.5, 0.5),
             'prediction_meaning': 'simulated prediction (explain module not available)',
             'explanation': {
-                'human_explanation': '🔍 **Explanation:** The model used spatial patterns to make this prediction. The confidence is estimated based on the data available.\n\n📊 **Key Insights:**\n- The model found patterns in the rainfall data\n- Confidence Level: MEDIUM\n\n💡 **What this means:**\nThis is a simulated explanation. Install captum for full explainability.',
+                'human_explanation': '🔍 **Explanation:** The model used spatial patterns to make this prediction.\n\n📊 **Key Insights:**\n- The model found patterns in the rainfall data\n- Confidence Level: MEDIUM\n\n💡 **What this means:**\nThis is a simulated explanation. Install captum for full explainability.',
                 'summary': {
                     'avg_importance': 0.50,
                     'max_importance': 0.70,
@@ -397,73 +379,18 @@ def explain_human():
         'summary': result['explanation']['summary'],
         'feature_summary': result['feature_summary']['description'],
         'risk_score': risk,
-        'data_source': 'real' if data_loaded else 'synthetic' if AI_AVAILABLE else 'placeholder',
+        'data_source': 'real' if data_loaded else 'synthetic' if model is not None else 'placeholder',
         'timestamp': datetime.now().isoformat()
     })
 
-@api.route('/predict_weather', methods=['POST'])
-@log_request
-def predict_weather():
-    """Get live weather + AI prediction"""
-    data = request.json
-    
-    if data is None:
-        return jsonify({'error': 'No JSON data provided'}), 400
-    
-    lat = data.get('lat')
-    lon = data.get('lon')
-    city = data.get('city', 'Unknown')
-    
-    if lat is None or lon is None:
-        return jsonify({'error': 'Missing lat or lon'}), 400
-    
-    # Get live weather
-    weather = get_live_weather(float(lat), float(lon))
-    if weather is None:
-        return jsonify({'error': 'Failed to fetch weather data'}), 500
-    
-    # Get AI prediction
-    load_model()
-    load_real_data()
-    
-    temperature = weather['temperature']
-    rainfall = weather['rainfall']
-    
-    # Get input tensor
-    if data_loaded:
-        idx = np.random.randint(0, len(X_data))
-        input_tensor = X_data[idx:idx+1].clone()
-    else:
-        input_tensor = torch.randn(1, 30, 1, 10, 10)
-    
-    result = predict_with_uncertainty(model, input_tensor)
-    risk = climate_risk_score(temperature, rainfall)
-    
-    return jsonify({
-        'location': {
-            'city': city,
-            'latitude': lat,
-            'longitude': lon
-        },
-        'live_weather': weather,
-        'ai_prediction': {
-            'prediction': result['prediction'],
-            'uncertainty': result['uncertainty'],
-            'confidence_interval': result['confidence_interval']
-        },
-        'risk_score': risk,
-        'data_source': 'real' if data_loaded else 'synthetic' if AI_AVAILABLE else 'placeholder',
-        'timestamp': datetime.now().isoformat()
-    })
-
-# Add this new endpoint for comprehensive climate data
-
-@api.route('/climate', methods=['POST'])
+@api.route('/climate', methods=['POST', 'OPTIONS'])
+@cross_origin()
 @log_request
 def get_climate():
-    """Get COMPLETE climate data for a location"""
-    data = request.json
+    if request.method == 'OPTIONS':
+        return '', 200
     
+    data = request.json
     if data is None:
         return jsonify({'error': 'No JSON data provided'}), 400
     
@@ -474,12 +401,10 @@ def get_climate():
     if lat is None or lon is None:
         return jsonify({'error': 'Missing lat or lon'}), 400
     
-    # Get live weather
     weather = get_live_weather(float(lat), float(lon))
     if weather is None:
         return jsonify({'error': 'Failed to fetch weather data'}), 500
     
-    # Load AI model and data
     load_model()
     load_real_data()
     
@@ -490,7 +415,6 @@ def get_climate():
     pressure = weather['pressure']
     cloud_cover = weather['cloud_cover']
     
-    # Get input tensor for AI prediction
     if data_loaded and X_data is not None:
         idx = np.random.randint(0, len(X_data))
         input_tensor = X_data[idx:idx+1].clone()
@@ -500,7 +424,6 @@ def get_climate():
     result = predict_with_uncertainty(model, input_tensor)
     risk = climate_risk_score(temperature, rainfall)
     
-    # Save to database with all variables
     try:
         prediction = Prediction(
             temperature=temperature,
@@ -519,33 +442,19 @@ def get_climate():
         )
         db.session.add(prediction)
         db.session.commit()
-        
-        # Create alert for high risk
-        if risk['severity'] in ['HIGH', 'SEVERE']:
-            alert = Alert(
-                severity=risk['severity'],
-                message=f"⚠️ Climate Alert: {risk['severity']} risk detected! Risk Score: {risk['risk_score']}",
-                risk_score=risk['risk_score']
-            )
-            db.session.add(alert)
-            db.session.commit()
     except Exception as e:
         print(f"⚠️ Database error: {e}")
     
     return jsonify({
-        'location': {
-            'city': city,
-            'latitude': lat,
-            'longitude': lon
-        },
+        'location': {'city': city, 'latitude': lat, 'longitude': lon},
         'live_weather': {
-            'temperature': weather['temperature'],
-            'rainfall': weather['rainfall'],
-            'humidity': weather['humidity'],
-            'wind_speed': weather['wind_speed'],
+            'temperature': temperature,
+            'rainfall': rainfall,
+            'humidity': humidity,
+            'wind_speed': wind_speed,
             'wind_direction': weather.get('wind_direction', 0),
-            'pressure': weather['pressure'],
-            'cloud_cover': weather['cloud_cover'],
+            'pressure': pressure,
+            'cloud_cover': cloud_cover,
             'timestamp': weather['timestamp'],
             'source': weather['source']
         },
@@ -559,26 +468,13 @@ def get_climate():
         'timestamp': datetime.now().isoformat()
     })
 
-# Add endpoint for getting historical climate data
-@api.route('/climate/history', methods=['GET'])
-@log_request
-def get_climate_history():
-    """Get historical climate predictions"""
-    limit = safe_int(request.args.get('limit', 50))
-    try:
-        predictions = Prediction.query.order_by(Prediction.timestamp.desc()).limit(limit).all()
-        return jsonify({
-            'predictions': [p.to_dict() for p in predictions],
-            'count': len(predictions)
-        })
-    except Exception as e:
-        return jsonify({'error': f'Database error: {str(e)}'}), 500
-   
-
-@api.route('/history', methods=['GET'])
+@api.route('/history', methods=['GET', 'OPTIONS'])
+@cross_origin()
 @log_request
 def get_history():
-    """Get prediction history"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     limit = safe_int(request.args.get('limit', 50))
     try:
         predictions = Prediction.query.order_by(Prediction.timestamp.desc()).limit(limit).all()
@@ -589,10 +485,13 @@ def get_history():
     except Exception as e:
         return jsonify({'error': f'Database error: {str(e)}'}), 500
 
-@api.route('/alerts', methods=['GET'])
+@api.route('/alerts', methods=['GET', 'OPTIONS'])
+@cross_origin()
 @log_request
 def get_alerts():
-    """Get alerts"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     limit = safe_int(request.args.get('limit', 20))
     try:
         alerts = Alert.query.order_by(Alert.timestamp.desc()).limit(limit).all()
@@ -603,10 +502,13 @@ def get_alerts():
     except Exception as e:
         return jsonify({'error': f'Database error: {str(e)}'}), 500
 
-@api.route('/alerts/<int:alert_id>/read', methods=['PUT'])
+@api.route('/alerts/<int:alert_id>/read', methods=['PUT', 'OPTIONS'])
+@cross_origin()
 @log_request
 def mark_alert_read(alert_id):
-    """Mark alert as read"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     try:
         alert = Alert.query.get(alert_id)
         if not alert:

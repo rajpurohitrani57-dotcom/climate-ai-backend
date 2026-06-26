@@ -2,48 +2,42 @@ import requests
 from datetime import datetime
 
 def get_live_weather(lat, lon):
-    """
-    Get REAL-TIME weather data from Open-Meteo (FREE, no API key)
-    Includes: temperature, rainfall, humidity, wind speed, pressure, cloud cover
-    """
     try:
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
             "latitude": lat,
             "longitude": lon,
             "current_weather": True,
-            "hourly": [
-                "temperature_2m",
-                "precipitation",
-                "relative_humidity_2m",
-                "wind_speed_10m",
-                "wind_direction_10m",
-                "surface_pressure",
-                "cloud_cover"
-            ],
+            "hourly": "temperature_2m,precipitation,relative_humidity_2m,wind_speed_10m,wind_direction_10m,surface_pressure,cloud_cover",
             "timezone": "Asia/Kolkata"
         }
-        
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
-        
         current = data.get('current_weather', {})
         hourly = data.get('hourly', {})
         
-        # Extract all variables
-        weather_data = {
+        humidity = 45
+        pressure = 1012
+        cloud_cover = 20
+        
+        if 'hourly' in data and 'relative_humidity_2m' in hourly and len(hourly['relative_humidity_2m']) > 0:
+            humidity = hourly['relative_humidity_2m'][0]
+        if 'hourly' in data and 'surface_pressure' in hourly and len(hourly['surface_pressure']) > 0:
+            pressure = hourly['surface_pressure'][0]
+        if 'hourly' in data and 'cloud_cover' in hourly and len(hourly['cloud_cover']) > 0:
+            cloud_cover = hourly['cloud_cover'][0]
+        
+        return {
             'temperature': current.get('temperature', 0),
             'rainfall': current.get('precipitation', 0),
-            'humidity': hourly.get('relative_humidity_2m', [0])[0] if 'hourly' in data else None,
+            'humidity': humidity,
             'wind_speed': current.get('windspeed', 0),
             'wind_direction': current.get('winddirection', 0),
-            'pressure': hourly.get('surface_pressure', [0])[0] if 'hourly' in data else None,
-            'cloud_cover': hourly.get('cloud_cover', [0])[0] if 'hourly' in data else None,
+            'pressure': pressure,
+            'cloud_cover': cloud_cover,
             'timestamp': current.get('time', datetime.now().isoformat()),
             'source': 'Open-Meteo'
         }
-        
-        return weather_data
     except Exception as e:
         print(f"⚠️ Weather API error: {e}")
         return None
