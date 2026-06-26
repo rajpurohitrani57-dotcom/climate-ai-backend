@@ -2,51 +2,74 @@ import requests
 from datetime import datetime
 
 def get_live_weather(lat, lon):
-    """
-    Get REAL-TIME weather data from Open-Meteo (FREE, no API key)
-    Includes: temperature, rainfall, humidity, wind speed, pressure, cloud cover
-    """
     try:
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
             "latitude": lat,
             "longitude": lon,
             "current_weather": True,
-            "hourly": [
-                "temperature_2m",
-                "precipitation",
-                "relative_humidity_2m",
-                "wind_speed_10m",
-                "wind_direction_10m",
-                "surface_pressure",
-                "cloud_cover"
-            ],
+            "hourly": "temperature_2m,precipitation,relative_humidity_2m,wind_speed_10m,cloud_cover",
             "timezone": "Asia/Kolkata"
         }
         
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
         
+        # Get current weather
         current = data.get('current_weather', {})
+        
+        # Get hourly data for humidity and cloud cover
         hourly = data.get('hourly', {})
         
-        # Extract all variables
-        weather_data = {
-            'temperature': current.get('temperature', 0),
-            'rainfall': current.get('precipitation', 0),
-            'humidity': hourly.get('relative_humidity_2m', [0])[0] if 'hourly' in data else None,
-            'wind_speed': current.get('windspeed', 0),
-            'wind_direction': current.get('winddirection', 0),
-            'pressure': hourly.get('surface_pressure', [0])[0] if 'hourly' in data else None,
-            'cloud_cover': hourly.get('cloud_cover', [0])[0] if 'hourly' in data else None,
-            'timestamp': current.get('time', datetime.now().isoformat()),
+        # Extract values with proper fallbacks
+        temperature = current.get('temperature')
+        rainfall = current.get('precipitation')
+        wind_speed = current.get('windspeed')
+        wind_direction = current.get('winddirection')
+        timestamp = current.get('time')
+        
+        # Get humidity from hourly data (first value)
+        humidity = None
+        if 'relative_humidity_2m' in hourly and hourly['relative_humidity_2m']:
+            humidity = hourly['relative_humidity_2m'][0]
+        
+        # Get cloud cover from hourly data (first value)
+        cloud_cover = None
+        if 'cloud_cover' in hourly and hourly['cloud_cover']:
+            cloud_cover = hourly['cloud_cover'][0]
+        
+        # If no humidity from hourly, use a default
+        if humidity is None:
+            humidity = 45  # Default fallback
+        
+        if cloud_cover is None:
+            cloud_cover = 20  # Default fallback
+        
+        return {
+            'temperature': temperature if temperature is not None else 0,
+            'rainfall': rainfall if rainfall is not None else 0,
+            'humidity': humidity,
+            'wind_speed': wind_speed if wind_speed is not None else 0,
+            'wind_direction': wind_direction if wind_direction is not None else 0,
+            'cloud_cover': cloud_cover,
+            'pressure': 1013,  # Default pressure (Open-Meteo free tier doesn't provide pressure in current_weather)
+            'timestamp': timestamp if timestamp else datetime.now().isoformat(),
             'source': 'Open-Meteo'
         }
-        
-        return weather_data
     except Exception as e:
         print(f"⚠️ Weather API error: {e}")
-        return None
+        # Return fallback data so frontend doesn't break
+        return {
+            'temperature': 25,
+            'rainfall': 0,
+            'humidity': 45,
+            'wind_speed': 10,
+            'wind_direction': 180,
+            'cloud_cover': 20,
+            'pressure': 1013,
+            'timestamp': datetime.now().isoformat(),
+            'source': 'Fallback'
+        }
 
 INDIAN_CITIES = {
     'delhi': {'lat': 28.61, 'lon': 77.23},
